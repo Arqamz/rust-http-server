@@ -30,7 +30,7 @@ fn main() {
     }
 }
 fn handle_req(mut stream: TcpStream) {
-fn handle_req(mut stream: TcpStream, dir: String) {
+fn handle_req(mut stream: TcpStr:eam, dir: String) {
     let lines = parse_request(&stream);
     let req_details: Vec<_> = lines[0].split(" ").collect();
     let headers = &lines[1..];
@@ -81,7 +81,6 @@ fn parse_request(mut stream: &TcpStream) -> Vec<String> {
         .collect();
     http_req
 }
-fn echo_response(input: &str) -> String {
 fn echo_response(input: &str, content_type: &str) -> String {
     format!(
         "HTTP/1.1 {}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
