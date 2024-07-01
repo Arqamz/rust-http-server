@@ -2,90 +2,109 @@ use std::{
     env, fs,
     io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
-    str,
 };
-use itertools::Itertools;
+
 static RESPONSE_OK: &str = "200 OK";
 static RESPONSE_NOT_FOUND: &str = "404 Not Found";
+
 fn main() {
-    let mut dir: &String = &Default::default();
+    let mut dir = String::new();
+
+    // Parse command line arguments to find --directory flag
     let args: Vec<_> = env::args().collect();
-    let found = args.iter().find_position(|arg| *arg == "--directory");
-    match found {
-        Some((index, _)) => dir = &args[index + 1],
-        None => (),
+    if let Some(index) = args.iter().position(|arg| arg == "--directory") {
+        dir = args[index + 1].clone(); // Assume the directory path is provided next to --directory
     }
+
+    // Bind to localhost:4221
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
+    println!("Server listening on port 4221...");
+
+    // Listen for incoming connections
     for stream in listener.incoming() {
         match stream {
-            Ok(stream) => handle_req(stream),
             Ok(stream) => {
-                let new_dir = dir.clone();
+                let new_dir = dir.clone(); // Clone dir for each new thread
                 std::thread::spawn(|| handle_req(stream, new_dir));
             }
             Err(e) => {
-                println!("error: {}", e);
+                println!("Error accepting connection: {}", e);
             }
         }
     }
 }
-fn handle_req(mut stream: TcpStream) {
-fn handle_req(mut stream: TcpStr:eam, dir: String) {
-    let lines = parse_request(&stream);
-    let req_details: Vec<_> = lines[0].split(" ").collect();
-    let headers = &lines[1..];
 
-            .filter(|s| !s.is_empty())
-            .collect();
-        res = echo_response(input[1]);
-        res = echo_response(input[1], "text/plain");
-    } else if req_details[1].starts_with("/user-agent") {
-        let found = headers
-            .iter()
-            .find(|header| header.starts_with("User-Agent:"));
-        match found {
-            Some(header) => {
-                let user_agent: Vec<_> = header.split(" ").collect();
-                res = echo_response(user_agent[1]);
-                res = echo_response(user_agent[1], "text/plain");
-            }
-            None => res = format!("HTTP/1.1 {}\r\n\r\n", RESPONSE_NOT_FOUND),
-        }
-    } else if req_details[1].starts_with("/files") {
-        let input: Vec<_> = req_details[1]
-            .split("/")
-            .filter(|s| !s.is_empty())
-            .collect();
-        let file = fs::read_to_string(format!("{}{}", dir, input[1]));
-        match file {
-            Ok(contents) => res = echo_response(contents.as_str(), "application/octet-stream"),
-            Err(e) => {
-                res = format!("HTTP/1.1 {}\r\n\r\n", RESPONSE_NOT_FOUND);
-                println!("error: {}", e)
-            }
-        }
+fn handle_req(mut stream: TcpStream, dir: String) {
+    // Parse the HTTP request
+    let lines = parse_request(&mut stream);
+    let req_details: Vec<_> = lines[0].split_whitespace().collect();
+
+    // Initialize response string
+    let mut res = String::new();
+
+    // Process request based on the requested path
+    if req_details.len() < 2 {
+        res = format!("HTTP/1.1 {}\r\n\r\n", RESPONSE_NOT_FOUND);
     } else {
         match req_details[1] {
             "/" => res = format!("HTTP/1.1 {}\r\n\r\n", RESPONSE_OK),
+            "/files" => {
+                let input: Vec<_> = req_details[1]
+                    .split("/")
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                if input.len() > 1 {
+                    let file_path = format!("{}{}", dir, input[1]);
+                    let file_content = fs::read_to_string(file_path);
+
+                    match file_content {
+                        Ok(content) => {
+                            res = echo_response(&content, "text/plain");
+                        }
+                        Err(_) => {
+                            res = format!("HTTP/1.1 {}\r\n\r\n", RESPONSE_NOT_FOUND);
+                        }
+                    }
+                } else {
+                    res = format!("HTTP/1.1 {}\r\n\r\n", RESPONSE_NOT_FOUND);
+                }
+            }
             _ => res = format!("HTTP/1.1 {}\r\n\r\n", RESPONSE_NOT_FOUND),
         }
     }
-    stream.write_all(res.as_bytes()).unwrap()
+
+    // Send the response back to the client
+    if let Err(e) = stream.write_all(res.as_bytes()) {
+        println!("Error writing to stream: {}", e);
+    }
 }
-fn parse_request(mut stream: &TcpStream) -> Vec<String> {
-    let buf_reader = BufReader::new(&mut stream);
-    let http_req: Vec<_> = buf_reader
-        .lines()
-        .map(|res| res.unwrap())
-        .take_while(|line| !line.is_empty())
-        .collect();
+
+fn parse_request(stream: &mut TcpStream) -> Vec<String> {
+    let mut buf_reader = BufReader::new(stream);
+    let mut http_req = Vec::new();
+    let mut buffer = Vec::new();  // Buffer to store read data
+
+    loop {
+        buffer.clear();
+        match buf_reader.read_until(b'\n', &mut buffer) {
+            Ok(0) => break,  // End of stream
+            Ok(_) => {
+                // Convert buffer to string and push to http_req
+                let line = String::from_utf8_lossy(&buffer);
+                http_req.push(line.trim().to_string());
+            }
+            Err(_) => break,  // Error or EOF
+        }
+    }
+
     http_req
 }
+
 fn echo_response(input: &str, content_type: &str) -> String {
     format!(
-        "HTTP/1.1 {}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
+        "HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n{}",
         RESPONSE_OK,
-        "HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n{}",
         content_type,
         input.len(),
         input
