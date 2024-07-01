@@ -1,6 +1,5 @@
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    io::{BufRead, BufReader, Write},
     net::{TcpListener, TcpStream},
 };
 fn handle_path(first_line: &String) -> String {
