@@ -44,7 +44,6 @@ fn handle_connect(mut stream: TcpStream) {
     let mut buffer = [0; 1024];
     let ok_resp = "HTTP/1.1 200 OK\r\n\r\n".to_string();
     let not_found_resp = "HTTP/1.1 404 Not Found\r\n\r\n".to_string();
-    t 
     match stream.read(&mut buffer) {
         Ok(_n) => {
             println!("Req receided");
