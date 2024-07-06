@@ -1,107 +1,90 @@
-use anyhow::Error;
-use std::{
-    env, fs,
-    io::{Read, Write},
-    net::{TcpListener, TcpStream},
-    str, thread,
-};
-#[derive(Debug)]
-struct HttpRequest {
-    method: String,
-    path: String,
-    version: String,
-    host: Option<String>,
-    user_agent: Option<String>,
-}
-impl Default for HttpRequest {
-    fn default() -> Self {
-        HttpRequest {
-            user_agent: Default::default(),
-            host: Default::default(),
-            method: Default::default(),
-            version: Default::default(),
-            path: Default::default(),
-        }
-    }
-}
-fn main() {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    println!("Logs from your program will appear here!");
-    let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
+use anyhow::Result;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::{env, thread};
+const ADDRESS: &str = "127.0.0.1:4221";
+const OK_HEADER: &str = "HTTP/1.1 200 OK\r\n\r\n";
+const CREATED_HEADER: &str = "HTTP/1.1 201 OK\r\n\r\n";
+const NOT_FOUND_HEADER: &str = "HTTP/1.1 404 NOTFOUND\r\n\r\n";
+fn main() -> Result<()> {
+    let args: Vec<String> = env::args().collect();
+    let dir = if args.len() > 2 {
+        args.windows(2)
+            .find(|window| window[0] == "--directory")
+            .unwrap_or_default()[1]
+            .to_owned()
+    } else {
+        String::new()
+    };
+    let listener = TcpListener::bind(ADDRESS)?;
     for stream in listener.incoming() {
         match stream {
-            Ok(mut _stream) => {
-                thread::spawn(|| handle_connect(_stream));
+            Ok(mut stream) => {
+                let directory = dir.clone();
+                let _handle = thread::spawn(move || {
+                    println!("accepted new connection");
+                    let mut request = [0_u8; 1024];
+                    let bytes = stream.read(&mut request)?;
+                    let request_string = String::from_utf8_lossy(&request[..bytes]).into_owned();
+                    println!("got request:\n {}", request_string);
+                    handle_client(stream, &request_string, &directory)
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
             }
         }
     }
+    Ok(())
 }
-fn handle_connect(mut stream: TcpStream) {
-    println!("accepted new connection");
-    let mut buffer = [0; 1024];
-    let ok_resp = "HTTP/1.1 200 OK\r\n\r\n".to_string();
-    let not_found_resp = "HTTP/1.1 404 Not Found\r\n\r\n".to_string();
-    match stream.read(&mut buffer) {
-        Ok(_n) => {
-            println!("Req receided");
-            let req = str::from_utf8(&buffer).unwrap();
-            let http_request = pars_req(&req).unwrap();
-            let mut resp = not_found_resp.clone();
-            println!("path: {:?}", http_request.user_agent);
-            if http_request.path == "/" {
-                resp = ok_resp.clone();
-            } else if http_request.path.starts_with("/echo") {
-                let body = http_request.path.replace("/echo/", "");
-                resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}",
-                    body.len(),
-                    body
-                );
-            } else if http_request.path.starts_with("/user-agent") {
-                let body = http_request.user_agent.unwrap();
-                if http_request.method == "GET" {
-                    resp = format!(
-                                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}\r\n",
-                                    body.len(),
-                                    body
-                                )
-                }
-            } else if http_request.path.starts_with("/files") {
-                let file_name = http_request.path.replace("/files/", "");
-                let env_args: Vec<String> = env::args().collect();
-                let mut dir = env_args[2].clone();
-                dir.push_str(&file_name);
-                let file = fs::read(dir);
-                match file {
-                    Ok(fc) => {
-                        resp = format!("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}\r\n", fc.len(), String::from_utf8(fc).expect("file content"));
+fn handle_client(mut stream: TcpStream, request_string: &str, directory: &str) -> Result<()> {
+    let (fisrt_line, rest_lines) = request_string.split_once("\r\n").unwrap();
+    let (method, rest) = fisrt_line.split_once(' ').unwrap();
+    let response = match method {
+        "GET" => match rest.split_once(' ') {
+            Some((path, _)) => {
+                if path == "/" {
+                    OK_HEADER.to_string()
+                } else if path.starts_with("/echo/") {
+                    let rnd_str = path.strip_prefix("/echo/").unwrap();
+                    format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}\r\n\r\n", rnd_str.len(), rnd_str)
+                } else if path == "/user-agent" {
+                    let user_agents: Vec<String> = rest_lines
+                        .split("\r\n")
+                        .into_iter()
+                        .filter(|l| l.starts_with("User-Agent: "))
+                        .map(|l| l.strip_prefix("User-Agent: ").unwrap().to_string())
+                        .collect();
+                    format!("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{}\r\n\r\n", user_agents[0].len(), user_agents[0])
+                } else if path.starts_with("/files/") {
+                    let fname = path.strip_prefix("/files/").unwrap();
+                    match File::open(directory.to_owned() + fname) {
+                        Ok(mut file) => {
+                            let mut data = vec![];
+                            let _ = file.read_to_end(&mut data);
+                            let file_data = String::from_utf8_lossy(&data);
+                            format!("HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\r\n{}\r\n\r\n", file_data.len(), &file_data)
+                        }
+                        _ => NOT_FOUND_HEADER.to_string(),
                     }
-                    Err(..) => resp = not_found_resp.clone(),
+                } else {
+                    NOT_FOUND_HEADER.to_string()
                 }
             }
-            match stream.write(resp.as_bytes()) {
-                Ok(_) => println!("Ok"),
-                Err(e) => println!("err: {}", e),
-            }
+            _ => NOT_FOUND_HEADER.to_string(),
+        },
+        "POST" => {
+            let contents = rest_lines.split_once("\r\n\r\n").unwrap().1;
+            let fname = rest.split_once(' ').unwrap().0;
+            let fname = fname.strip_prefix("/files/").unwrap();
+            let mut file = File::create(directory.to_owned() + fname)?;
+            file.write_all(contents.as_bytes())?;
+            CREATED_HEADER.to_string()
         }
-        Err(e) => println!("Fail connect: {}", e),
-    }
-}
-fn pars_req(req: &str) -> Result<HttpRequest, Error> {
-    let content: Vec<&str> = req.lines().collect();
-    let mut method_header = content[0].split_whitespace();
-    let host = content[1].replace("Host: ", "");
-    let user_agent = content[2].replace("User-Agent: ", "");
-    let http_request = HttpRequest {
-        method: String::from(method_header.next().unwrap()),
-        path: String::from(method_header.next().unwrap()),
-        version: String::from(method_header.next().unwrap()),
-        host: Some(host),
-        user_agent: Some(user_agent),
-        ..Default::default()
+        _ => NOT_FOUND_HEADER.to_string(),
     };
-    Ok(http_request)
+    println!("Sending Response: {}", response);
+    stream.write_all(response.as_bytes())?;
+    Ok(())
 }
