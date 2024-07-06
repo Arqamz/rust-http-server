@@ -5,7 +5,7 @@ use std::net::{TcpListener, TcpStream};
 use std::{env, thread};
 const ADDRESS: &str = "127.0.0.1:4221";
 const OK_HEADER: &str = "HTTP/1.1 200 OK\r\n\r\n";
-const CREATED_HEADER: &str = "HTTP/1.1 201 OK\r\n\r\n";
+const CREATED_HEADER: &str = "HTTP/1.1 201 Created\r\n\r\n";
 const NOT_FOUND_HEADER: &str = "HTTP/1.1 404 NOTFOUND\r\n\r\n";
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
